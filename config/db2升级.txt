@@ -1,0 +1,119 @@
+ 
+ 
+DB2 V10.5.0.5升级步骤
+1.备份配置文件
+db2 get dbm cfg > db2dbm.cfg
+db2 get db cfg for <dbname> > <dbname>.cfg
+db2set -all > db2set.cfg
+db2look -d <dbname> -a -e -l -x -o db2look.ddl
+db2 list packages for all show detail > pck.txt
+db2 list db directory 						--> 建议做
+db2 list node directory 					-->  建议做
+
+
+2.停止双机
+ 
+3.停止WAS
+ 
+4.备份数据库
+db2 force application all
+db2 terminate
+db2stop
+db2start
+db2 backup db <dbname> online to /dbdata/backup include logs
+ 
+
+ 
+停止数据库
+db2 force application all
+db2 terminate
+db2stop
+/opt/ibm/db2/V10.5/instance/daslist, --->  su - dasusr1 --->   db2admin stop	----------> 升级前需要听das服务
+ 
+禁止故障检查器root
+/opt/ibm/db2/V10.5/bin/db2fmcu -d
+ 
+开始升级产品root
+cd /tmp/db2_fix
+./installFixPack -b /opt/ibm/db2/V10.5				---> 说白了就这两步 1
+ 
+升级实例
+/opt/ibm/db2/V10.5/instance/db2iupdt -u db2fenc1 db2inst1	--->	两步 2
+ 
+ 
+如9.7则输入97；如10.5则输入105；如11.1则输入111
+su - db2inst1
+db2start
+db2 activate db testdb
+db2updv105 -d testdb				---->这一步应该是 db2start 前执行啊，  你看下这个文档
+						https://www.ibm.com/support/knowledgecenter/SSEPGG_10.5.0/com.ibm.db2.luw.qb.server.doc/doc/t0024995.html
+ 
+	 					-----> 需要执行	DB2DIR/instance/dasupdt，请看备注2:
+
+ 
+验证
+db2level
+#检查db2diag.log日志，查看是否有错误发生
+#如果出现错误，查看/tmp目录更新版本日志，可重复升级产品和实例
+ 
+检查
+db2 connect to <dbname>
+db2 "select * from <tablename> fetch first 10 row only"
+ 
+数据库重新绑定程序包
+db2 terminate
+db2 connect to <dbname>				----> Bind the bind files. Binding of the database utilities and the CLI bind files ,其实是可选项
+						----> 请参考备注3
+db2 bind /home/db2inst1/sqllib/bnd/db2schema.bnd blocking all grant public SQLERROR continue	
+db2 bind /home/db2inst1/sqllib/bnd/@db2ubind.lst blocking all grant public action add
+db2 bind /home/db2inst1/sqllib/bnd/@db2cli.lst   blocking all grant public action add
+
+
+db2 terminate
+在数据库中运行db2rbind命令重新绑定所有无效的程序包
+db2rbind <dbname> -l logfile all
+ 
+ 
+su - db2inst1
+db2 connect to testdb
+db2 "select pkgschema,pkgname from syscat.packages where valid='X'"
+#如果上面命令有结果输出，再执行以下步骤。
+db2 -x "select 'rebind package ' || trim(pkgschema) || '.' || trim(pkgname) || ';' from syscat.package where valid='X'"		--->应该是packages
+ 
+db2 -x "select 'rebind package ' || trim(pkgschema) || '.' || trim(pkgname) || ';' from syscat.packages where valid='X'" > /tmp/rebind.ddl
+db2 -tvf /tmp/rebind.ddl | tee /tmp/rebind.out
+再次查看是否有需要绑定的包
+db2 "select pkgschema,pkgname from syscat.packages where valid='X'"
+ 
+如果rbind package时报SQL2453，则执行：
+db2 "call sysproc.admin_revalidate_db_objects(null,null,null)"				---->不错，用来Revalidate everything in the current database.
+ 
+再次执行
+db2 "select pkgschema,pkgname from syscat.packages where valid='X'"
+
+
+----------备注：
+备注1：关于：db2updv105，解释如下：
+To have access to new administrative routines in a Version 10.5 fix pack release in databases that were created in Version 10.5 prior to the fix pack release,
+you must run the db2updv105 command. 
+
+If your database was created before Version 10.5 and you upgrade to a Version 10.5 fix pack release, 
+it is not necessary to run the db2updv105 command because the system catalog is automatically updated by the database upgrade.
+解释： 升级小布丁需要做，升级打补丁到10.5.* ，或者直接安装补丁就不需要做了
+
+
+
+备注2： 关于DB2DIR/instance/dasupdt
+就是以root用户 执行/opt/ibm/db2/V10.5/instance/dasupdt
+
+[root@db105 instance]# pwd
+/opt/ibm/db2/V10.5/instance
+[root@db105 instance]# 
+[root@db105 instance]# ./dasupdt 
+DBI1070I  Program dasupdt completed successfully.
+
+
+备注3：
+Optional: Bind the bind files. Binding of the database utilities and the CLI bind files occurs automatically. 
+However, if an error occurs, you can manually bind the database utilities and the CLI bind files. 
+Refer to Binding bind files after installing fix packs.
